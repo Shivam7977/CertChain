@@ -1,0 +1,67 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Platform owner - CertChain</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"><link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"></script>
+<script src="contract.js"></script></head><body>
+<header id="top"></header>
+<main>
+<div id="loginView"><h1>Platform owner</h1>
+<p class="sub">Connect the wallet that deployed the contract. Only the owner can register or suspend colleges.</p>
+<div class="box"><button id="connect">Connect MetaMask</button> <button class="ghost hidden" id="cont">Continue to dashboard</button><div id="loginMsg"></div></div></div>
+<div id="dashView" class="hidden"><h1>Owner dashboard</h1><div id="roleMsg" class="msg"></div>
+<div class="box" style="margin-top:20px"><h2>Register a college</h2>
+<label for="regAddr">College admin wallet address</label><input id="regAddr" placeholder="0x... (40 hex characters, not a private key)">
+<label for="regName">College name</label><input id="regName">
+<button id="regBtn">Register college</button><div id="regMsg"></div></div>
+<div class="box"><h2>Registered colleges</h2><div id="colList" class="small">Loading...</div></div>
+</div></main>
+<script src="shared.js"></script>
+<script>
+renderNav("owner.html");
+let contract, account;
+const $ = (id) => document.getElementById(id);
+const say = (id, cls, txt) => { $(id).className = "msg " + cls; $(id).textContent = txt; };
+view.apply = () => { applyView($("loginView"), $("dashView")); $("cont").classList.toggle("hidden", !view.authed); };
+$("cont").onclick = goDashboard;
+view.apply();
+
+$("connect").onclick = async () => {
+  try {
+    ({ account, contract } = await connectWallet());
+    if ((await contract.owner()).toLowerCase() !== account.toLowerCase()) return say("loginMsg", "bad", "This wallet is not the platform owner. Switch to the owner account in MetaMask: " + account);
+    view.authed = true;
+    say("roleMsg", "ok", "Logged in as platform owner.");
+    showWho(account, () => { view.authed = false; location.hash = ""; view.apply(); });
+    loadColleges();
+    goDashboard();
+  } catch (e) { say("loginMsg", "bad", errText(e)); }
+};
+
+$("regBtn").onclick = async () => {
+  const a = $("regAddr").value.trim(), n = $("regName").value.trim();
+  if (!ethers.isAddress(a) || !n) return say("regMsg", "bad", "Enter a valid wallet address (0x + 40 characters) and a college name.");
+  $("regBtn").disabled = true;
+  try {
+    say("regMsg", "warn", "Confirm the transaction in MetaMask...");
+    await (await contract.registerCollege(a, n)).wait();
+    say("regMsg", "ok", "College registered.");
+    $("regAddr").value = ""; $("regName").value = "";
+    loadColleges();
+  } catch (e) { say("regMsg", "bad", errText(e)); }
+  $("regBtn").disabled = false;
+};
+
+async function loadColleges() {
+  try {
+    const rc = readContract();
+    const logs = await rc.queryFilter(rc.filters.CollegeRegistered(), C.deployBlock);
+    $("colList").className = "small"; $("colList").innerHTML = logs.length ? "" : "No colleges registered yet.";
+    for (const l of logs) {
+      const addr = l.args.admin, col = await rc.colleges(addr);
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = "<div><b>" + esc(col.name) + "</b> (" + (col.active ? "active" : "suspended") + ")<div class='hash'>" + addr + "</div></div>";
+      const b = document.createElement("button"); b.className = "ghost"; b.style.margin = "0"; b.textContent = col.active ? "Suspend" : "Activate";
+      b.onclick = async () => { b.disabled = true; try { await (await contract.setCollegeActive(addr, !col.active)).wait(); loadColleges(); } catch (e) { alert(errText(e)); b.disabled = false; } };
+      row.appendChild(b); $("colList").appendChild(row);
+    }
+  } catch (e) { say("colList", "bad", "Could not load colleges: " + errText(e)); }
+}
+</script></body></html>

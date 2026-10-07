@@ -1,0 +1,131 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>College admin - CertChain</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"><link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="contract.js"></script></head><body>
+<header id="top"></header>
+<main>
+<div id="loginView"><h1>College admin</h1>
+<p class="sub">Log in by connecting your MetaMask wallet. Only wallets registered as a college can use this page.</p>
+<div class="box"><button id="connect">Connect MetaMask</button> <button class="ghost hidden" id="cont">Continue to dashboard</button><div id="loginMsg"></div></div></div>
+<div id="dashView" class="hidden"><h1>Dashboard</h1><div id="roleMsg" class="msg"></div>
+<div id="collegePanel" class="hidden"><div class="box"><h2>Issue a certificate - <span id="collegeName"></span></h2>
+<p class="small">Choose the original PDF. The website adds a QR code to it, saves the fingerprint of the final PDF on the blockchain and downloads that PDF for the student.</p>
+<label for="file">Certificate PDF</label><input type="file" id="file" accept="application/pdf,.pdf">
+<label for="name">Student name</label><input id="name">
+<label for="course">Course</label><input id="course" placeholder="Course name">
+<label for="year">Year</label><input id="year" type="number" min="1950" max="2100">
+<button id="issue">Issue certificate</button><div id="issueMsg"></div></div>
+<div class="box"><h2>Certificates issued by your college</h2><div id="listMsg"></div><div id="list" class="small">Loading...</div><input type="file" id="reFile" accept="application/pdf,.pdf" class="hidden"></div></div>
+</div></main>
+<script src="shared.js"></script>
+<script>
+renderNav("admin.html");
+let provider, contract, account;
+const $ = (id) => document.getElementById(id);
+const say = (id, cls, txt) => { $(id).className = "msg " + cls; $(id).textContent = txt; };
+view.apply = () => { applyView($("loginView"), $("dashView")); $("cont").classList.toggle("hidden", !view.authed); };
+$("cont").onclick = goDashboard;
+view.apply();
+
+$("connect").onclick = async () => {
+  try {
+    ({ account, contract } = await connectWallet());
+    if (!(await setupRoles())) return;
+    view.authed = true;
+    showWho(account, () => { view.authed = false; location.hash = ""; view.apply(); });
+    goDashboard();
+  } catch (e) { say("loginMsg", "bad", errText(e)); }
+};
+
+async function setupRoles() {
+  const col = await contract.colleges(account);
+  if (!col.name) { say("loginMsg", "bad", "This wallet is not a registered college: " + account + ". Ask the platform owner to register it."); return false; }
+  $("collegePanel").classList.toggle("hidden", !col.active);
+  say("roleMsg", col.active ? "ok" : "warn", (col.active ? "Logged in as college admin: " : "This college is suspended: ") + col.name + ".");
+  if (col.active) { $("collegeName").textContent = col.name; loadMine(); }
+  return true;
+}
+
+// PDF par QR vector shapes se banta hai (image nahi) aur metadata nahi badalta,
+// taaki same original PDF + same ID se hamesha bilkul same bytes bane
+async function stamp(file, id) {
+  const doc = await PDFLib.PDFDocument.load(await file.arrayBuffer(), { updateMetadata: false });
+  const qr = new QRCode(document.createElement("div"), { text: verifyLink(id), width: 128, height: 128, correctLevel: QRCode.CorrectLevel.M })._oQRCode;
+  const n = qr.getModuleCount(), size = 72, m = size / (n + 2), page = doc.getPage(0);
+  const x0 = page.getSize().width - size - 24, y0 = 24;
+  page.drawRectangle({ x: x0, y: y0, width: size, height: size, color: PDFLib.rgb(1, 1, 1) });
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++)
+    if (qr.isDark(r, c)) page.drawRectangle({ x: x0 + (c + 1) * m, y: y0 + size - (r + 2) * m, width: m + 0.05, height: m + 0.05, color: PDFLib.rgb(0, 0, 0) });
+  return await doc.save();
+}
+function saveBytes(bytes, fname) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+  const a = document.createElement("a"); a.href = url; a.download = fname; a.click();
+  return url;
+}
+
+$("issue").onclick = async () => {
+  const f = $("file").files[0], name = $("name").value.trim(), course = $("course").value.trim(), year = Number($("year").value);
+  if (!f || !/\.pdf$/i.test(f.name)) return say("issueMsg", "bad", "Choose a PDF file.");
+  if (!name || !course || !year) return say("issueMsg", "bad", "Fill in student name, course and year.");
+  $("issue").disabled = true;
+  try {
+    const id = "0x" + [...crypto.getRandomValues(new Uint8Array(32))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const bytes = await stamp(f, id), hash = await sha256(bytes);
+    // safety: dobara banakar match karo, tabhi baad me Re-download kaam karega
+    if ((await sha256(await stamp(f, id))) !== hash) throw new Error("This PDF cannot be stamped in a repeatable way (it may be encrypted). Please use another copy of the PDF.");
+    say("issueMsg", "warn", "Confirm the transaction in MetaMask, then wait for it to finish...");
+    await (await contract.issue(id, hash, name, course, year)).wait();
+    const fname = f.name.replace(/\.pdf$/i, "") + "-certified.pdf";
+    const url = saveBytes(bytes, fname);
+    say("issueMsg", "ok", "Certificate issued and the certified PDF was downloaded. Give the student exactly this file, and do not edit or re-save it.");
+    $("issueMsg").insertAdjacentHTML("beforeend", '<br><a href="' + url + '" download="' + esc(fname) + '">Download again</a>');
+    loadMine();
+  } catch (e) { say("issueMsg", "bad", errText(e)); }
+  $("issue").disabled = false;
+};
+
+let redoId = null;
+// Re-download: original PDF dobara choose karo, wahi ID se QR laga kar blockchain ke hash se match karo
+$("reFile").onchange = async (ev) => {
+  const f = ev.target.files[0]; ev.target.value = "";
+  if (!f || !redoId) return;
+  try {
+    say("listMsg", "warn", "Rebuilding the certified PDF...");
+    const r = await lookupId(redoId), bytes = await stamp(f, redoId);
+    if ((await sha256(bytes)) !== r.fileHash)
+      return say("listMsg", "bad", "The rebuilt file does not match the fingerprint saved on the blockchain. Select the exact same original PDF (the one without the QR). If you no longer have it, issue a new certificate and revoke this one.");
+    saveBytes(bytes, f.name.replace(/\.pdf$/i, "") + "-certified.pdf");
+    say("listMsg", "ok", "Done. The rebuilt file matches the blockchain fingerprint exactly and was downloaded.");
+  } catch (e) { say("listMsg", "bad", errText(e)); }
+};
+
+async function loadMine() {
+  try {
+    const rc = readContract();
+    const logs = await rc.queryFilter(rc.filters.CertificateIssued(null, account), C.deployBlock);
+    if (!logs.length) return ($("list").textContent = "No certificates issued yet.");
+    $("list").innerHTML = "";
+    for (const l of logs.reverse()) {
+      const id = l.args.id, r = await lookupId(id);
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = "<div><b>" + esc(r.name) + "</b> - " + esc(r.course) + " (" + r.year + ")<div class='hash'>" + shortHash(id) + "</div></div>";
+      if (r.revoked) row.insertAdjacentHTML("beforeend", "<span class='small'>Revoked</span>");
+      else {
+        const b = document.createElement("button"); b.className = "danger"; b.textContent = "Revoke";
+        b.onclick = async () => {
+          if (!confirm("Revoke the certificate of " + r.name + "? This cannot be undone.")) return;
+          b.disabled = true;
+          try { await (await contract.revoke(id)).wait(); loadMine(); } catch (e) { alert(errText(e)); b.disabled = false; }
+        };
+        const re = document.createElement("button"); re.className = "ghost"; re.style.cssText = "margin:0;padding:6px 14px"; re.textContent = "Re-download";
+        re.onclick = () => { redoId = id; $("reFile").click(); };
+        const box = document.createElement("div"); box.style.cssText = "display:flex;gap:8px;flex-wrap:wrap"; box.append(re, b);
+        row.appendChild(box);
+      }
+      $("list").appendChild(row);
+    }
+  } catch (e) { say("list", "bad", "Could not load the list: " + errText(e)); }
+}
+</script></body></html>

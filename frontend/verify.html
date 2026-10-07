@@ -1,0 +1,30 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"><link rel="stylesheet" href="style.css"><title>Verifier - CertChain</title><script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script><script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script><script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"></script><script src="contract.js"></script><script src="firebase-config.js"></script></head><body>
+<header id="top"></header>
+<main><h1>Verify a certificate</h1>
+<p class="sub">Scan the QR on the certificate to open it here, or upload the PDF to check the file itself.</p>
+<div id="msg"></div>
+<div class="box" id="box"><label for="file" style="margin-top:0">Certificate file</label><input type="file" id="file"><div id="result"></div></div></main>
+<script src="shared.js"></script>
+<script>
+renderNav("verify.html");
+const $ = (id) => document.getElementById(id);
+const urlId = new URLSearchParams(location.search).get("id");
+const auth = authInit((c, t) => { $("msg").className = "msg " + c; $("msg").textContent = t; $("box").classList.add("hidden"); });
+if (auth) auth.onAuthStateChanged((u) => {
+  // login nahi hai to login page par bhejo, login ke baad yahin wapas aayega
+  if (!u) return location.replace("login.html?next=" + encodeURIComponent("verify.html" + location.search));
+  $("who").innerHTML = '<span class="small">' + esc(u.email) + '</span> <button class="ghost" id="logout" style="margin:0 0 0 8px;padding:6px 14px">Log out</button>';
+  $("logout").onclick = () => auth.signOut();
+  if (isHash(urlId)) lookupId(urlId).then((r) => showResult($("result"), r, "Checked using the certificate ID from the QR. Upload the file below to confirm that the file itself matches."))
+    .catch((e) => { $("result").className = "msg bad"; $("result").textContent = "Could not read the blockchain: " + errText(e); });
+});
+$("file").onchange = async (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  try {
+    const r = await lookupFile(await hashFile(f));
+    const other = r.exists && isHash(urlId) && r.id.toLowerCase() !== urlId.toLowerCase();
+    showResult($("result"), r, other ? "Warning: this file belongs to a different certificate than the QR link you opened." : "");
+  } catch (e) { $("result").className = "msg bad"; $("result").textContent = "Could not read the blockchain: " + errText(e); }
+};
+</script></body></html>

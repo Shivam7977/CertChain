@@ -1,0 +1,18 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"><link rel="stylesheet" href="style.css"><title>Log in - CertChain</title><script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script><script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script><script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"></script><script src="contract.js"></script><script src="firebase-config.js"></script></head><body>
+<header id="top"></header>
+<main class="auth"><div class="box"><h1>Log in</h1><p class="sub">Verifier account</p>
+<form id="f"><label for="email">Email</label><input id="email" type="email" autocomplete="email" required>
+<label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required>
+<button id="go">Log in</button></form><div id="msg"></div>
+<p class="small" style="margin-top:18px">New here? <a href="signup.html">Create an account</a></p></div></main>
+<script src="shared.js"></script>
+<script>
+renderNav("verify.html");
+const $ = (id) => document.getElementById(id);
+const say = (c, t) => { $("msg").className = "msg " + c; $("msg").textContent = t; };
+const auth = authInit(say);
+if (auth) {
+  auth.onAuthStateChanged((u) => { if (u) location.replace(nextUrl()); });
+  $("f").onsubmit = (ev) => { ev.preventDefault(); auth.signInWithEmailAndPassword($("email").value.trim(), $("pw").value).catch((e) => say("bad", authErr(e))); };
+} else $("go").disabled = true;
+</script></body></html>
